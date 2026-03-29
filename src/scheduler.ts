@@ -1,134 +1,119 @@
+import { Plugin } from './plugins/base';
 import { Logger } from './logger';
 
-export interface TaskContext {
-  log: Logger;
-  signal: AbortSignal;
-}
-
-export interface Task {
-  /** Unique task name */
-  name: string;
-  /** How often to run in milliseconds */
-  intervalMs: number;
-  /** The work to perform */
-  run(ctx: TaskContext): Promise<void>;
-}
-
-interface ScheduledTask {
-  task: Task;
-  timer: ReturnType<typeof setTimeout> | null;
-  running: boolean;
-  errorCount: number;
-}
-
 export interface SchedulerOptions {
-  retryAttempts?: number;
-  retryDelayMs?: number;
-  onStatusChange?: (name: string, status: 'running' | 'idle' | 'error') => void;
+  /** How often (ms) each plugin's `run()` is called. Default: 5000 */
+  intervalMs?: number;
 }
 
+interface PluginEntry {
+  plugin: Plugin;
+  timer: ReturnType<typeof setInterval> | null;
+}
+
+/**
+ * Simple interval-based scheduler.
+ *
+ * Each registered plugin runs independently on its own interval so a slow
+ * plugin cannot block others.
+ */
 export class Scheduler {
-  private tasks = new Map<string, ScheduledTask>();
-  private abortController = new AbortController();
+  private readonly entries: Map<string, PluginEntry> = new Map();
+  private readonly intervalMs: number;
+  private readonly logger: Logger;
+  private running = false;
 
-  constructor(
-    private readonly log: Logger,
-    private readonly options: SchedulerOptions = {},
-  ) {}
-
-  register(task: Task): void {
-    if (this.tasks.has(task.name)) {
-      throw new Error(`Task "${task.name}" is already registered`);
-    }
-    this.tasks.set(task.name, {
-      task,
-      timer: null,
-      running: false,
-      errorCount: 0,
-    });
-    this.log.info('Task registered', { task: task.name, intervalMs: task.intervalMs });
+  constructor(options: SchedulerOptions = {}) {
+    this.intervalMs = options.intervalMs ?? parseInt(process.env['POLL_INTERVAL_MS'] ?? '5000', 10);
+    this.logger = new Logger('scheduler');
   }
 
-  start(): void {
-    for (const entry of this.tasks.values()) {
-      this.schedule(entry);
+  register(plugin: Plugin): void {
+    if (this.entries.has(plugin.name)) {
+      throw new Error(`Plugin "${plugin.name}" is already registered`);
     }
-    this.log.info('Scheduler started', { taskCount: this.tasks.size });
+    this.entries.set(plugin.name, { plugin, timer: null });
+    this.logger.debug('Plugin registered', { plugin: plugin.name });
+  }
+
+  async start(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+
+    this.logger.info('Scheduler starting', {
+      plugins: [...this.entries.keys()],
+      intervalMs: this.intervalMs,
+    });
+
+    // Initialise all plugins concurrently
+    await Promise.all(
+      [...this.entries.values()].map(async ({ plugin }) => {
+        try {
+          await plugin.init?.();
+          this.logger.info('Plugin initialised', { plugin: plugin.name });
+        } catch (err) {
+          this.logger.error('Plugin init failed', { plugin: plugin.name, err: String(err) });
+        }
+      }),
+    );
+
+    // Schedule each plugin
+    for (const entry of this.entries.values()) {
+      entry.timer = setInterval(() => {
+        void this.runPlugin(entry.plugin);
+      }, this.intervalMs);
+    }
+
+    this.logger.info('Scheduler started');
   }
 
   async stop(): Promise<void> {
-    this.abortController.abort();
-    for (const entry of this.tasks.values()) {
+    if (!this.running) return;
+    this.running = false;
+
+    this.logger.info('Scheduler stopping');
+
+    // Clear all timers
+    for (const entry of this.entries.values()) {
       if (entry.timer !== null) {
-        clearTimeout(entry.timer);
+        clearInterval(entry.timer);
         entry.timer = null;
       }
     }
-    // Wait briefly for any in-flight runs to detect the abort signal
-    await new Promise((r) => setTimeout(r, 50));
-    this.log.info('Scheduler stopped');
-  }
 
-  private schedule(entry: ScheduledTask): void {
-    entry.timer = setTimeout(() => this.run(entry), entry.task.intervalMs);
-  }
-
-  private async run(entry: ScheduledTask): Promise<void> {
-    if (this.abortController.signal.aborted) return;
-
-    entry.running = true;
-    this.options.onStatusChange?.(entry.task.name, 'running');
-
-    const ctx: TaskContext = {
-      log: this.log.child({ task: entry.task.name }),
-      signal: this.abortController.signal,
-    };
-
-    const maxAttempts = this.options.retryAttempts ?? 3;
-    const baseDelay = this.options.retryDelayMs ?? 1_000;
-
-    let attempt = 0;
-    let succeeded = false;
-
-    while (attempt < maxAttempts && !this.abortController.signal.aborted) {
-      attempt++;
-      try {
-        await entry.task.run(ctx);
-        entry.errorCount = 0;
-        succeeded = true;
-        break;
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        this.log.warn('Task attempt failed', {
-          task: entry.task.name,
-          attempt,
-          maxAttempts,
-          error: message,
-        });
-
-        if (attempt < maxAttempts && !this.abortController.signal.aborted) {
-          const delay = baseDelay * 2 ** (attempt - 1);
-          await new Promise((r) => setTimeout(r, delay));
+    // Teardown all plugins concurrently
+    await Promise.all(
+      [...this.entries.values()].map(async ({ plugin }) => {
+        try {
+          await plugin.teardown?.();
+          this.logger.info('Plugin torn down', { plugin: plugin.name });
+        } catch (err) {
+          this.logger.error('Plugin teardown failed', { plugin: plugin.name, err: String(err) });
         }
-      }
-    }
+      }),
+    );
 
-    if (!succeeded) {
-      entry.errorCount++;
-      this.log.error('Task failed after all attempts', {
-        task: entry.task.name,
-        errorCount: entry.errorCount,
+    this.logger.info('Scheduler stopped');
+  }
+
+  private async runPlugin(plugin: Plugin): Promise<void> {
+    const start = Date.now();
+    try {
+      await plugin.run();
+      this.logger.debug('Plugin run complete', {
+        plugin: plugin.name,
+        durationMs: Date.now() - start,
       });
-      this.options.onStatusChange?.(entry.task.name, 'error');
-    } else {
-      this.options.onStatusChange?.(entry.task.name, 'idle');
+    } catch (err) {
+      this.logger.error('Plugin run error', {
+        plugin: plugin.name,
+        err: String(err),
+        durationMs: Date.now() - start,
+      });
     }
+  }
 
-    entry.running = false;
-
-    // Reschedule unless shutting down
-    if (!this.abortController.signal.aborted) {
-      this.schedule(entry);
-    }
+  get isRunning(): boolean {
+    return this.running;
   }
 }
