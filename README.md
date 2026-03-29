@@ -1,120 +1,90 @@
 # Robot 🤖
 
-A lightweight TypeScript framework for building autonomous scheduled-task agents with structured logging, automatic retries, and a built-in health endpoint.
+A lightweight, extensible automation robot framework built with TypeScript and Node.js.
 
 ## Features
 
-- **Task scheduling** — run tasks on fixed intervals
+- **Task scheduling** — run tasks on intervals or cron-like schedules
+- **Plugin architecture** — add new capabilities via simple plugin modules
 - **Structured logging** — JSON-formatted logs with configurable levels
-- **Error recovery** — automatic retries with configurable limits
-- **Health endpoint** — built-in HTTP health-check server
+- **Health check endpoint** — built-in HTTP server for monitoring
+- **Graceful shutdown** — handles SIGTERM/SIGINT cleanly
 
-## Quick start
+## Getting Started
+
+### Prerequisites
+
+- Node.js >= 18
+- npm >= 9
+
+### Installation
 
 ```bash
 npm install
-cp .env.example .env
-npm run dev
 ```
 
-## Configuration
+### Configuration
 
-Copy `.env.example` to `.env` and adjust as needed:
-
-| Variable             | Default | Description                          |
-|----------------------|---------|--------------------------------------|
-| `LOG_LEVEL`          | `info`  | Log verbosity (`debug`, `info`, `warn`, `error`) |
-| `HEALTH_PORT`        | `3000`  | Port for the health-check HTTP server |
-| `RETRY_MAX_ATTEMPTS` | `3`     | Max retry attempts per failed task   |
-| `RETRY_DELAY_MS`     | `1000`  | Delay between retries (ms)           |
-
-These variables are loaded automatically at startup via `dotenv` and passed into the robot configuration.
-
-## Usage
-
-### Starting the robot
+Copy the example environment file and fill in your values:
 
 ```bash
-# Development (ts-node)
+cp .env.example .env
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3000` | HTTP health-check server port |
+| `LOG_LEVEL` | `info` | Logging level (`debug`, `info`, `warn`, `error`) |
+| `POLL_INTERVAL_MS` | `5000` | Default task poll interval in milliseconds |
+
+### Running
+
+```bash
+# Development (with auto-reload)
 npm run dev
 
-# Production (compiled)
+# Production build
 npm run build
 npm start
+
+# Tests
+npm test
 ```
 
-### Writing a custom task
+## Architecture
 
-```ts
-import { Task } from "./scheduler";
-
-const myTask: Task = {
-  name: "my-task",
-  intervalMs: 60_000,           // run every 60 seconds
-  maxRetries: 3,                // optional, overrides default
-  retryDelayMs: 500,            // optional, overrides default
-  run: async (logger) => {
-    logger.info("Running my task");
-    // ... your logic here
-  },
-};
-
-export default myTask;
+```
+src/
+├── index.ts          # Entry point — wires everything together
+├── robot.ts          # Core Robot class
+├── scheduler.ts      # Task scheduler
+├── logger.ts         # Structured logger
+├── server.ts         # HTTP health-check server
+└── plugins/
+    ├── base.ts       # Base plugin interface
+    └── example.ts    # Example plugin
 ```
 
-Register the task in `src/index.ts`:
+## Writing a Plugin
 
-```ts
-import myTask from "./tasks/my-task";
+```typescript
+import { BasePlugin } from './src/plugins/base';
 
-robot.schedule(myTask);
-```
+export class MyPlugin extends BasePlugin {
+  name = 'my-plugin';
 
-### Health endpoint
-
-Once the robot is running, check its status:
-
-```bash
-curl http://localhost:3000/health
-```
-
-Example response:
-
-```json
-{
-  "status": "ok",
-  "uptime": 42,
-  "tasks": {
-    "heartbeat": "ok",
-    "my-task": "ok"
+  async run(): Promise<void> {
+    this.logger.info('MyPlugin running');
+    // your logic here
   }
 }
 ```
 
-## Project structure
+Register it in `src/index.ts`:
 
+```typescript
+robot.register(new MyPlugin());
 ```
-src/
-  index.ts          # entrypoint — loads env, wires up Robot
-  robot.ts          # core Robot class
-  scheduler.ts      # task scheduler
-  logger.ts         # structured logger
-  health.ts         # health-check HTTP server
-  tasks/
-    example.ts      # example built-in task
-.env.example        # sample environment variables
-package.json
-tsconfig.json
-```
-
-## Scripts
-
-| Script        | Description                        |
-|---------------|------------------------------------|
-| `npm run dev` | Run with ts-node (development)     |
-| `npm run build` | Compile TypeScript to `dist/`    |
-| `npm start`   | Run compiled output                |
-| `npm test`    | Run Jest test suite                |
 
 ## License
 
