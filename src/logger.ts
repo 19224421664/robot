@@ -1,3 +1,7 @@
+/**
+ * Structured JSON logger with configurable log levels.
+ */
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const LEVELS: Record<LogLevel, number> = {
@@ -7,27 +11,30 @@ const LEVELS: Record<LogLevel, number> = {
   error: 3,
 };
 
-export interface Logger {
-  debug(msg: string, meta?: Record<string, unknown>): void;
-  info(msg: string, meta?: Record<string, unknown>): void;
-  warn(msg: string, meta?: Record<string, unknown>): void;
-  error(msg: string, meta?: Record<string, unknown>): void;
-  child(bindings: Record<string, unknown>): Logger;
+function getConfiguredLevel(): LogLevel {
+  const raw = process.env['LOG_LEVEL'] ?? 'info';
+  if (raw in LEVELS) return raw as LogLevel;
+  return 'info';
 }
 
-function createLogger(
-  minLevel: LogLevel = 'info',
-  bindings: Record<string, unknown> = {},
-): Logger {
-  function log(level: LogLevel, msg: string, meta?: Record<string, unknown>): void {
-    if (LEVELS[level] < LEVELS[minLevel]) return;
+export class Logger {
+  private readonly context: string;
+  private readonly minLevel: number;
+
+  constructor(context: string, level?: LogLevel) {
+    this.context = context;
+    this.minLevel = LEVELS[level ?? getConfiguredLevel()];
+  }
+
+  private write(level: LogLevel, message: string, meta?: Record<string, unknown>): void {
+    if (LEVELS[level] < this.minLevel) return;
 
     const entry = {
-      timestamp: new Date().toISOString(),
+      ts: new Date().toISOString(),
       level,
-      msg,
-      ...bindings,
-      ...meta,
+      context: this.context,
+      message,
+      ...(meta ?? {}),
     };
 
     const line = JSON.stringify(entry);
@@ -39,15 +46,25 @@ function createLogger(
     }
   }
 
-  return {
-    debug: (msg, meta) => log('debug', msg, meta),
-    info: (msg, meta) => log('info', msg, meta),
-    warn: (msg, meta) => log('warn', msg, meta),
-    error: (msg, meta) => log('error', msg, meta),
-    child: (extra) => createLogger(minLevel, { ...bindings, ...extra }),
-  };
+  debug(message: string, meta?: Record<string, unknown>): void {
+    this.write('debug', message, meta);
+  }
+
+  info(message: string, meta?: Record<string, unknown>): void {
+    this.write('info', message, meta);
+  }
+
+  warn(message: string, meta?: Record<string, unknown>): void {
+    this.write('warn', message, meta);
+  }
+
+  error(message: string, meta?: Record<string, unknown>): void {
+    this.write('error', message, meta);
+  }
+
+  child(context: string): Logger {
+    return new Logger(`${this.context}:${context}`);
+  }
 }
 
-export const logger = createLogger(
-  (process.env['LOG_LEVEL'] as LogLevel | undefined) ?? 'info',
-);
+export const rootLogger = new Logger('robot');
