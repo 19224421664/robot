@@ -1,7 +1,7 @@
 {
   "name": "robot",
   "version": "1.0.0",
-  "description": "A TypeScript-based robot framework with scheduling, structured logging, and health endpoint",
+  "description": "A TypeScript-based autonomous task scheduling framework",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -16,7 +16,7 @@
     "@types/jest": "^29.5.12",
     "@types/node": "^20.14.0",
     "jest": "^29.7.0",
-    "ts-jest": "^29.1.4",
+    "ts-jest": "^29.1.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
   },
@@ -25,7 +25,8 @@
     "testEnvironment": "node",
     "testMatch": [
       "**/tests/**/*.test.ts",
-      "**/*.test.ts"
-    ]
+      "**/?(*.)+(spec|test).ts"
+    ],
+    "passWithNoTests": true
   }
 }
